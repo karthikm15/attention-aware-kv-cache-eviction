@@ -6,7 +6,7 @@ feed last-layer softmax attention into H2OOracleState each prefill/decode step.
 Install (from repo root): pip install -e .
 
 Example:
-  python scripts/run_hf_h2o_demo.py --model gpt2 --max-new-tokens 16 \\
+  python scripts/run_hf_h2o_demo.py --model gpt2 --max-new-tokens 16 \
     --heavy-ratio 0.2 --recent-ratio 0.2
 """
 

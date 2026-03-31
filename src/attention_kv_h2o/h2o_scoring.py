@@ -17,23 +17,12 @@ from typing import Optional
 
 import torch
 
-
-def scores_from_attention_probs(attn_weights: torch.Tensor) -> torch.Tensor:
-    """
-    Reduce softmax attention to per-head key scores for one forward pass.
-
-    attn_weights: (batch, num_heads, query_len, key_len)
-    returns: (num_heads, key_len)
-    """
-    if attn_weights.dim() != 4:
-        raise ValueError(
-            f"attn_weights must be 4D (B, H, Q, K), got shape {tuple(attn_weights.shape)}"
-        )
-    return attn_weights.sum(dim=0).sum(dim=1)
+from attention_kv_h2o.kv_cache_base import KVCachePolicy
+from attention_kv_h2o.utils import scores_from_attention_probs
 
 
 @dataclass
-class H2OOracleState:
+class H2OOracleState(KVCachePolicy):
     """
     Stateful H2O scorer + next-step attention mask (per head, per key).
 
@@ -60,9 +49,6 @@ class H2OOracleState:
         self.cache_budget_records.clear()
         self.input_lengths.clear()
         self.attention_masks_next = None
-
-    def _dtype_device(self, attn_weights: torch.Tensor) -> tuple[torch.dtype, torch.device]:
-        return attn_weights.dtype, attn_weights.device
 
     def step(
         self,
@@ -163,50 +149,6 @@ class H2OOracleState:
             "recent_budget": self.recent_budget,
             "cache_budget": self.cache_budget,
         }
-
-    def apply_mask_to_attn_weights(
-        self,
-        attn_weights: torch.Tensor,
-        mask: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        """
-        Zero out disallowed keys in pre-softmax attention weights (additive mask).
-
-        attn_weights: (B, H, Q, K) logits or unnormalized scores
-        mask: (1, H, 1, K) with 1 = keep, 0 = block; defaults to attention_masks_next
-        """
-        if mask is None:
-            mask = self.attention_masks_next
-        if mask is None:
-            return attn_weights
-        if mask.shape[-1] != attn_weights.shape[-1]:
-            raise ValueError(
-                f"mask K ({mask.shape[-1]}) must match attn_weights K ({attn_weights.shape[-1]})"
-            )
-        min_val = torch.finfo(attn_weights.dtype).min
-        return attn_weights * mask + (1.0 - mask) * min_val
-
-    def logits_mask_additive(
-        self,
-        key_len: int,
-        *,
-        dtype: torch.dtype,
-        device: torch.device,
-    ) -> torch.Tensor:
-        """
-        Build additive mask (B=1, H, 1, K) for raw attention logits: 0 for keep, min for drop.
-        Uses attention_masks_next from the last step(); if None, returns all zeros.
-        """
-        if self.attention_masks_next is None:
-            return torch.zeros(1, 1, 1, key_len, dtype=dtype, device=device)
-        h = self.attention_masks_next.shape[1]
-        if self.attention_masks_next.shape[-1] != key_len:
-            raise ValueError(
-                f"attention_masks_next K ({self.attention_masks_next.shape[-1]}) != key_len ({key_len})"
-            )
-        min_val = torch.finfo(dtype).min
-        m = self.attention_masks_next.to(dtype=dtype, device=device)
-        return (1.0 - m) * min_val
 
 
 def simulate_eviction_trace(
